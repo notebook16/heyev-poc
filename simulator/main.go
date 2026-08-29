@@ -1,185 +1,108 @@
 package main
 
 import (
-	"crypto/tls"
-	"crypto/x509"
+	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"iot-simulator-poc/command"
+	"iot-simulator-poc/config"
+	"iot-simulator-poc/logger"
+	"iot-simulator-poc/mqttclient"
+	"iot-simulator-poc/tlsconfig"
 )
 
 func main() {
-	fmt.Println("Starting IoT Simulator POC")
+	log := logger.New()
+	reader := bufio.NewReader(os.Stdin)
 
-	// --------------------------------------------------
-	// 1. Load Amazon Root CA
-	// --------------------------------------------------
-
-	caCert, err := os.ReadFile(
-		"../certs/simulator/AmazonRootCA1.pem",
-	)
+	cfg, err := config.PromptInteractive(reader)
 	if err != nil {
-		fmt.Println("Failed to read CA Certificate:", err)
+		log.Error("%v", err)
 		os.Exit(1)
 	}
 
-	caPool := x509.NewCertPool()
+	printStartupConfig(log, cfg)
 
-	if !caPool.AppendCertsFromPEM(caCert) {
-		fmt.Println("Failed to add CA Certificate")
-		os.Exit(1)
+	subscribeTopic := cfg.DefaultCommandTopic()
+
+	if cfg.Mode == config.ModeControlled {
+		deviceID, err := promptLine(reader, "Device ID (use + for all devices):")
+		if err != nil {
+			log.Error("%v", err)
+			os.Exit(1)
+		}
+		if err := cfg.SetCommandSubscribeTopic(deviceID); err != nil {
+			log.Error("%v", err)
+			os.Exit(1)
+		}
+		subscribeTopic = cfg.CommandTopic
 	}
 
-	// --------------------------------------------------
-	// 2. Load simulator certificate + private key
-	// --------------------------------------------------
-
-	
-		
-	cert, err := tls.LoadX509KeyPair(
-    		"../certs/simulator/a75bd3d3cf1ed6d465c3114ee171b232cef5cb6e5e0eb9a01dd83034001d9879-certificate.pem.crt",
-    		"../certs/simulator/a75bd3d3cf1ed6d465c3114ee171b232cef5cb6e5e0eb9a01dd83034001d9879-private.pem.key",
-	)
-	
-
+	tlsCfg, err := tlsconfig.Load(cfg.Endpoint)
 	if err != nil {
-		fmt.Println("Failed to load simulator certificate:", err)
+		log.TLS("%v", err)
 		os.Exit(1)
 	}
+	log.TLS("TLS configured with mutual authentication")
 
-	// --------------------------------------------------
-	// 3. TLS configuration
-	// --------------------------------------------------
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	tlsConfig := &tls.Config{
-		RootCAs:      caPool,
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-		ServerName:   os.Getenv("IOT_ENDPOINT"),
-	}
+	mqttClient := mqttclient.New(cfg, log, nil)
+	cmdHandler := command.NewHandler(cfg, log, mqttClient, reader)
+	mqttClient.SetMessageHandler(cmdHandler.OnMessage)
 
-	// --------------------------------------------------
-	// 4. MQTT configuration
-	// --------------------------------------------------
-
-	opts := mqtt.NewClientOptions()
-
-	opts.AddBroker(
-		"ssl://" + os.Getenv("IOT_ENDPOINT") + ":8883",
-	)
-
-	opts.SetClientID("iot-simulator-poc")
-
-	// MQTT 3.1.1
-	opts.SetProtocolVersion(4)
-
-	opts.SetTLSConfig(tlsConfig)
-
-	// --------------------------------------------------
-	// 5. Command handler
-	// --------------------------------------------------
-
-	opts.SetDefaultPublishHandler(
-		func(client mqtt.Client, msg mqtt.Message) {
-
-			fmt.Println()
-			fmt.Println("========== COMMAND RECEIVED ==========")
-			fmt.Println("Topic:", msg.Topic())
-			fmt.Println("QoS:", msg.Qos())
-			fmt.Println("Payload:", string(msg.Payload()))
-			fmt.Println("======================================")
-
-			// For our POC, this simulator represents
-			// device 6264.
-
-			ackTopic := "heyev/v1/devices/6264/ack"
-
-			ackPayload := `{
-				"device_id": "6264",
-				"status": "ACKNOWLEDGED",
-				"message": "Command received by simulator"
-			}`
-
-			token := client.Publish(
-				ackTopic,
-				0,
-				false,
-				ackPayload,
-			)
-
-			if token.Wait() && token.Error() != nil {
-				fmt.Println("Failed to publish ACK:", token.Error())
-				return
-			}
-
-			fmt.Println("ACK published to:", ackTopic)
-		},
-	)
-
-	// --------------------------------------------------
-	// 6. Create MQTT client
-	// --------------------------------------------------
-
-	client := mqtt.NewClient(opts)
-
-	fmt.Println("Connecting to AWS IoT Core...")
-	fmt.Println("Endpoint:", os.Getenv("IOT_ENDPOINT"))
-	fmt.Println("Client ID: iot-simulator-poc")
-
-	token := client.Connect()
-
-	if token.Wait() && token.Error() != nil {
-		fmt.Println("Connection Failed:", token.Error())
+	if err := mqttClient.Connect(ctx, tlsCfg, subscribeTopic); err != nil {
+		log.Connect("%v", err)
 		os.Exit(1)
 	}
-
-	fmt.Println("Connected to AWS IoT Core Successfully!")
-
-	// --------------------------------------------------
-	// 7. Subscribe to commands
-	// --------------------------------------------------
-
-	commandTopic := "heyev/v1/devices/+/commands"
-
-	fmt.Println("Subscribing to:", commandTopic)
-
-	token = client.Subscribe(
-		commandTopic,
-		0,
-		nil,
-	)
-
-	if token.Wait() && token.Error() != nil {
-		fmt.Println("Subscription Failed:", token.Error())
-		client.Disconnect(250)
-		os.Exit(1)
-	}
-
-	fmt.Println("Successfully subscribed to command topic!")
-	fmt.Println("Simulator is waiting for commands...")
-	fmt.Println("Press Ctrl+C to stop.")
-
-	// --------------------------------------------------
-	// 8. Keep simulator alive
-	// --------------------------------------------------
 
 	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	signal.Notify(
-		sigChan,
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
+	go func() {
+		<-sigChan
+		log.Disconnect("Stopping IoT Simulator...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = mqttClient.Disconnect(shutdownCtx)
+		log.Disconnect("Disconnected from AWS IoT Core.")
+		os.Exit(0)
+	}()
 
-	<-sigChan
+	if cfg.Mode == config.ModeAutonomous {
+		log.Simulator("Waiting for commands...")
+		log.Simulator("Press Ctrl+C to stop.")
+		select {}
+	}
 
-	fmt.Println()
-	fmt.Println("Stopping IoT Simulator...")
+	cmdHandler.RunControlledLoop(ctx)
+}
 
-	client.Disconnect(250)
+func printStartupConfig(log *logger.Logger, cfg *config.Config) {
+	log.Config("Starting IoT Simulator POC")
+	log.Config("Mode: %s", cfg.Mode)
+	log.Config("MQTT Version: 5")
+	log.Config("QoS: %d", cfg.QoS)
+	log.Config("Retain: %t", cfg.Retain)
+	log.Config("DUP: %t", cfg.Dup)
+	log.Config("Message Expiry: N/A on simulator ACK publish (backend sets expiry on commands)")
+	log.Config("Client ID: %s", cfg.ClientID)
+	log.Config("Endpoint: %s", cfg.Endpoint)
+	log.Config("Auto reconnect: %t", cfg.AutoReconnect)
+}
 
-	fmt.Println("Disconnected from AWS IoT Core.")
+func promptLine(reader *bufio.Reader, label string) (string, error) {
+	fmt.Printf("%s\n> ", label)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("read input: %w", err)
+	}
+	return strings.TrimSpace(line), nil
 }
