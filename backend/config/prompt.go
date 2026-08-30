@@ -39,9 +39,12 @@ func PromptInteractive(r *bufio.Reader) (*Config, error) {
 		fmt.Println("Option B: retain=false is required (session queue delivery).")
 		cfg.Retain = false
 	} else {
-		cfg.Retain, err = promptYesNo(r, "Set RETAIN=true on command publish?", false)
+		cfg.Retain, err = promptYesNo(r, "Set RETAIN=true on command publish? (needed for Option A late subscribe)", true)
 		if err != nil {
 			return nil, err
+		}
+		if !cfg.Retain {
+			fmt.Println("NOTE: retain=false only delivers to a simulator that is already subscribed.")
 		}
 	}
 

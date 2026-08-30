@@ -85,7 +85,11 @@ func main() {
 		os.Exit(0)
 	}()
 
-	log.Config("Backend is listening for ACKs. Enter commands below (Ctrl+C to stop).")
+	log.Config("ACK subscribe ready on %s", cfg.AckSubscribeTopic)
+	if cfg.DeliveryMode == config.DeliveryModeA && !cfg.EffectiveRetain() {
+		log.Config("NOTE: retain=false — the simulator must already be subscribed. For late-subscribe Option A, enable RETAIN=true.")
+	}
+	log.Config("Device ID is set. Now publish a command: name, value, expiry seconds, optional request ID. Ctrl+C to stop.")
 
 	for {
 		commandDeviceID := cfg.CommandDeviceID
@@ -101,16 +105,17 @@ func main() {
 			}
 		}
 
-		commandName, err := promptLine(reader, "Command:")
+		commandName, err := promptLine(reader, "Command name (example: lock):")
 		if err != nil {
 			log.Error("%v", err)
 			continue
 		}
 		if strings.TrimSpace(commandName) == "" {
+			fmt.Println("Command name cannot be empty. Example: lock")
 			continue
 		}
 
-		value, err := promptLine(reader, "Value:")
+		value, err := promptLine(reader, "Value (example: on):")
 		if err != nil {
 			log.Error("%v", err)
 			continue

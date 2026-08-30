@@ -77,8 +77,8 @@ func main() {
 	}()
 
 	if cfg.Mode == config.ModeAutonomous {
-		log.Simulator("Waiting for commands...")
-		log.Simulator("Press Ctrl+C to stop.")
+		log.Simulator("Subscribed to %s", subscribeTopic)
+		log.Simulator("Waiting for commands from the backend. A command is published only after you enter name/value/expiry on the backend. Press Ctrl+C to stop.")
 		select {}
 	}
 

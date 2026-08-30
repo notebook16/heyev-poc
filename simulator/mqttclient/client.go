@@ -19,32 +19,24 @@ import (
 )
 
 type Client struct {
-	cfg       *config.Config
-	log       *logger.Logger
-	cm        *autopaho.ConnectionManager
-	subTopic  string
-	onMessage func(*paho.Publish)
-	mu        sync.Mutex
-	firstUp   bool
-}
-
-type stdAdapter struct {
-	log *logger.Logger
-}
-
-func (a stdAdapter) Println(v ...interface{}) {
-	a.log.MQTT("%s", fmt.Sprint(v...))
-}
-
-func (a stdAdapter) Printf(format string, v ...interface{}) {
-	a.log.MQTT(format, v...)
+	cfg          *config.Config
+	log          *logger.Logger
+	cm           *autopaho.ConnectionManager
+	subTopic     string
+	onMessage    func(*paho.Publish)
+	mu           sync.Mutex
+	firstUp      bool
+	firstSubDone chan struct{}
+	firstSubOnce sync.Once
+	firstSubErr  error
 }
 
 func New(cfg *config.Config, log *logger.Logger, onMessage func(*paho.Publish)) *Client {
 	return &Client{
-		cfg:       cfg,
-		log:       log,
-		onMessage: onMessage,
+		cfg:          cfg,
+		log:          log,
+		onMessage:    onMessage,
+		firstSubDone: make(chan struct{}),
 	}
 }
 
@@ -130,7 +122,31 @@ func (c *Client) Connect(ctx context.Context, tlsCfg *tls.Config, subscribeTopic
 		return fmt.Errorf("await connection: %w", err)
 	}
 
-	return nil
+	if c.subTopic == "" {
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("await subscribe: %w", ctx.Err())
+	case <-c.firstSubDone:
+		c.mu.Lock()
+		err := c.firstSubErr
+		c.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("subscribe %s: %w", c.subTopic, err)
+		}
+		return nil
+	}
+}
+
+func (c *Client) signalFirstSub(err error) {
+	c.firstSubOnce.Do(func() {
+		c.mu.Lock()
+		c.firstSubErr = err
+		c.mu.Unlock()
+		close(c.firstSubDone)
+	})
 }
 
 func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
@@ -156,6 +172,7 @@ func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, connAck *paho.Co
 	}
 
 	if c.subTopic == "" {
+		c.signalFirstSub(nil)
 		return
 	}
 
@@ -170,6 +187,7 @@ func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, connAck *paho.Co
 	})
 	if err != nil {
 		c.log.Error("Subscribe failed for %s: %v", c.subTopic, err)
+		c.signalFirstSub(err)
 		return
 	}
 
@@ -180,6 +198,7 @@ func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, connAck *paho.Co
 	} else {
 		c.log.Subscribe("Successful")
 	}
+	c.signalFirstSub(nil)
 }
 
 func (c *Client) Manager() *autopaho.ConnectionManager {
