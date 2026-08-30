@@ -60,12 +60,13 @@ func (c *Client) Connect(ctx context.Context, tlsCfg *tls.Config, subscribeTopic
 		return fmt.Errorf("parse broker URL: %w", err)
 	}
 
+	cleanStart := !c.cfg.PersistentSession
 	cliCfg := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{serverURL},
 		TlsCfg:                        tlsCfg,
 		KeepAlive:                     30,
-		CleanStartOnInitialConnection: true,
-		SessionExpiryInterval:         0,
+		CleanStartOnInitialConnection: cleanStart,
+		SessionExpiryInterval:         c.cfg.SessionExpirySec,
 		ConnectTimeout:                30 * time.Second,
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
 			c.onConnectionUp(cm, connAck)
@@ -117,6 +118,13 @@ func (c *Client) Connect(ctx context.Context, tlsCfg *tls.Config, subscribeTopic
 	c.log.Connect("Connecting to AWS IoT Core...")
 	c.log.Connect("Endpoint: %s", c.cfg.Endpoint)
 	c.log.Connect("Client ID: %s", c.cfg.ClientID)
+	c.log.Session("Delivery mode: %s", c.cfg.DeliveryMode.Label())
+	c.log.Session("Clean Start: %t", cleanStart)
+	c.log.Session("Session expiry: %ds", c.cfg.SessionExpirySec)
+	c.log.Session("Persistent session: %t", c.cfg.PersistentSession)
+	if c.cfg.DeliveryMode == config.DeliveryModeB {
+		c.log.Session("Option B: QoS 1 subscribe required for offline command queue")
+	}
 
 	if err := cm.AwaitConnection(ctx); err != nil {
 		return fmt.Errorf("await connection: %w", err)
@@ -125,16 +133,26 @@ func (c *Client) Connect(ctx context.Context, tlsCfg *tls.Config, subscribeTopic
 	return nil
 }
 
-func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, _ *paho.Connack) {
+func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
 	c.mu.Lock()
 	reconnect := c.firstUp
 	c.firstUp = true
 	c.mu.Unlock()
 
+	sessionPresent := false
+	if connAck != nil {
+		sessionPresent = connAck.SessionPresent
+	}
+
 	if reconnect {
 		c.log.Connect("SIMULATOR RECONNECTED")
+		c.log.Session("SessionPresent (CONNACK): %t", sessionPresent)
+		if c.cfg.DeliveryMode == config.DeliveryModeB && sessionPresent {
+			c.log.Session("Option B: broker may deliver queued commands after reconnect")
+		}
 	} else {
 		c.log.Connect("Connected to AWS IoT Core")
+		c.log.Session("SessionPresent (CONNACK): %t", sessionPresent)
 	}
 
 	if c.subTopic == "" {
@@ -144,9 +162,10 @@ func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, _ *paho.Connack)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	subQoS := c.cfg.CommandSubscribeQoS()
 	_, err := cm.Subscribe(ctx, &paho.Subscribe{
 		Subscriptions: []paho.SubscribeOptions{
-			{Topic: c.subTopic, QoS: c.cfg.QoS},
+			{Topic: c.subTopic, QoS: subQoS},
 		},
 	})
 	if err != nil {
@@ -155,7 +174,7 @@ func (c *Client) onConnectionUp(cm *autopaho.ConnectionManager, _ *paho.Connack)
 	}
 
 	c.log.Subscribe("Topic: %s", c.subTopic)
-	c.log.Subscribe("QoS: %d", c.cfg.QoS)
+	c.log.Subscribe("QoS: %d", subQoS)
 	if reconnect {
 		c.log.Subscribe("COMMAND SUBSCRIPTION RESTORED")
 	} else {

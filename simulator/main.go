@@ -88,9 +88,12 @@ func main() {
 func printStartupConfig(log *logger.Logger, cfg *config.Config) {
 	log.Config("Starting IoT Simulator POC")
 	log.Config("Mode: %s", cfg.Mode)
+	log.Config("Delivery mode: %s", cfg.DeliveryMode.Label())
 	log.Config("MQTT Version: 5")
 	log.Config("QoS: %d", cfg.QoS)
 	log.Config("Retain: %t", cfg.Retain)
+	log.Config("Session expiry: %ds", cfg.SessionExpirySec)
+	log.Config("Persistent session: %t", cfg.PersistentSession)
 	log.Config("DUP: %t", cfg.Dup)
 	log.Config("Message Expiry: N/A on simulator ACK publish (backend sets expiry on commands)")
 	log.Config("Client ID: %s", cfg.ClientID)

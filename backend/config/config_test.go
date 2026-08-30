@@ -41,3 +41,24 @@ func TestValidateRejectsQoS2(t *testing.T) {
 		t.Fatal("expected qos 2 to be rejected")
 	}
 }
+
+func TestValidateOptionBRequiresQoS1(t *testing.T) {
+	cfg := &Config{MQTTVersion: "5", DeliveryMode: DeliveryModeB, QoS: 0}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected Option B with QoS 0 to be rejected")
+	}
+}
+
+func TestValidateOptionBRejectsRetain(t *testing.T) {
+	cfg := &Config{MQTTVersion: "5", DeliveryMode: DeliveryModeB, QoS: 1, Retain: true}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected Option B with retain=true to be rejected")
+	}
+}
+
+func TestEffectiveRetainOptionB(t *testing.T) {
+	cfg := &Config{DeliveryMode: DeliveryModeB, Retain: true}
+	if cfg.EffectiveRetain() {
+		t.Fatal("Option B must force retain=false on publish")
+	}
+}

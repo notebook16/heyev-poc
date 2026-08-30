@@ -17,12 +17,15 @@ const (
 
 type Config struct {
 	MQTTVersion           string
+	DeliveryMode          DeliveryMode
 	QoS                   byte
 	Retain                bool
 	Dup                   bool
 	AllowDuplicatePublish bool
 	AutoReconnect         bool
 	Debug                 bool
+	SessionExpirySec      uint32
+	PersistentSession     bool
 	Endpoint              string
 	ClientID              string
 	DeviceID              string
@@ -68,6 +71,15 @@ func (c *Config) validate() error {
 
 	if c.QoS > 1 {
 		return fmt.Errorf("qos %d is not supported: AWS IoT Core supports QoS 0 and 1 only", c.QoS)
+	}
+
+	if c.DeliveryMode == DeliveryModeB {
+		if c.QoS != 1 {
+			return fmt.Errorf("Option B requires QoS 1 command publish (session offline queue needs QoS 1 subscription on device)")
+		}
+		if c.Retain {
+			return fmt.Errorf("Option B requires retain=false (retain is forced off for session queue delivery)")
+		}
 	}
 
 	if c.Dup {
