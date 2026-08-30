@@ -76,13 +76,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if cfg.Mode == config.ModeAutonomous {
-		log.Simulator("Subscribed to %s", subscribeTopic)
-		log.Simulator("Waiting for commands from the backend. A command is published only after you enter name/value/expiry on the backend. Press Ctrl+C to stop.")
-		select {}
-	}
-
-	cmdHandler.RunControlledLoop(ctx)
+	log.Simulator("Subscribed to %s", subscribeTopic)
+	cmdHandler.Run(ctx)
 }
 
 func printStartupConfig(log *logger.Logger, cfg *config.Config) {
