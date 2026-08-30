@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"heyev-backend-poc/ack"
 	"heyev-backend-poc/command"
 	"heyev-backend-poc/config"
@@ -89,89 +91,222 @@ func main() {
 	if cfg.DeliveryMode == config.DeliveryModeA && !cfg.EffectiveRetain() {
 		log.Config("NOTE: retain=false — the simulator must already be subscribed. For late-subscribe Option A, enable RETAIN=true.")
 	}
-	log.Config("Device ID is set. Now publish a command: name, value, expiry seconds, optional request ID. Ctrl+C to stop.")
+	log.Config("Device ID is set. Now publish a command: name, value, expiry seconds, optional request ID.")
+	log.Config("After each command, press Ctrl+R (or r) to send it again. Enter for a new command. Ctrl+C to stop.")
+
+	var last *savedCommand
 
 	for {
-		commandDeviceID := cfg.CommandDeviceID
-		if cfg.WildcardSubscribe {
-			commandDeviceID, err = promptLine(reader, "Command device ID:")
+		if last != nil {
+			repeat, err := waitRepeatOrNew(reader, *last)
 			if err != nil {
 				log.Error("%v", err)
 				continue
 			}
-			if err := cfg.SetCommandDeviceID(commandDeviceID); err != nil {
-				log.Error("%v", err)
+			if repeat {
+				log.Config("Repeating last command with a new request_id")
+				publishSaved(cfg, log, cmdService, tracker, mqttClient, *last, "")
 				continue
 			}
 		}
 
-		commandName, err := promptLine(reader, "Command name (example: lock):")
-		if err != nil {
+		if err := promptAndPublish(reader, cfg, log, cmdService, tracker, mqttClient, &last, ""); err != nil {
 			log.Error("%v", err)
-			continue
 		}
-		if strings.TrimSpace(commandName) == "" {
-			fmt.Println("Command name cannot be empty. Example: lock")
-			continue
-		}
+	}
+}
 
-		value, err := promptLine(reader, "Value (example: on):")
+type savedCommand struct {
+	DeviceID  string
+	Name      string
+	Value     string
+	ExpirySec uint32
+}
+
+func promptAndPublish(
+	reader *bufio.Reader,
+	cfg *config.Config,
+	log *logger.Logger,
+	cmdService *command.Service,
+	tracker *state.Tracker,
+	mqttClient *mqttclient.Client,
+	last **savedCommand,
+	commandName string,
+) error {
+	commandDeviceID := cfg.CommandDeviceID
+	if cfg.WildcardSubscribe {
+		id, err := promptLine(reader, "Command device ID:")
 		if err != nil {
+			return err
+		}
+		if err := cfg.SetCommandDeviceID(id); err != nil {
+			return err
+		}
+		commandDeviceID = cfg.CommandDeviceID
+	}
+
+	commandName = strings.TrimSpace(commandName)
+	if commandName == "" {
+		var err error
+		commandName, err = promptLine(reader, "Command name (example: lock):")
+		if err != nil {
+			return err
+		}
+	}
+	if commandName == "" {
+		return fmt.Errorf("command name cannot be empty. Example: lock")
+	}
+	if isRepeatInput(commandName) {
+		if last == nil || *last == nil {
+			return fmt.Errorf("no previous command to repeat yet")
+		}
+		log.Config("Repeating last command with a new request_id")
+		publishSaved(cfg, log, cmdService, tracker, mqttClient, **last, "")
+		return nil
+	}
+
+	value, err := promptLine(reader, "Value (example: on):")
+	if err != nil {
+		return err
+	}
+
+	expiryStr, err := promptLine(reader, "Message expiry in seconds (0 = no expiry):")
+	if err != nil {
+		return err
+	}
+	expirySec, err := strconv.ParseUint(strings.TrimSpace(expiryStr), 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid expiry value: %w", err)
+	}
+
+	requestID, err := promptLine(reader, "Request ID (blank = generate):")
+	if err != nil {
+		return err
+	}
+
+	saved := savedCommand{
+		DeviceID:  commandDeviceID,
+		Name:      commandName,
+		Value:     value,
+		ExpirySec: uint32(expirySec),
+	}
+	*last = &saved
+	publishSaved(cfg, log, cmdService, tracker, mqttClient, saved, requestID)
+	return nil
+}
+
+func publishSaved(
+	cfg *config.Config,
+	log *logger.Logger,
+	cmdService *command.Service,
+	tracker *state.Tracker,
+	mqttClient *mqttclient.Client,
+	saved savedCommand,
+	requestID string,
+) {
+	if cfg.WildcardSubscribe {
+		if err := cfg.SetCommandDeviceID(saved.DeviceID); err != nil {
 			log.Error("%v", err)
-			continue
+			return
 		}
+	}
 
-		expiryStr, err := promptLine(reader, "Message expiry in seconds (0 = no expiry):")
+	cmd, err := cmdService.Build(saved.DeviceID, saved.Name, saved.Value, strings.TrimSpace(requestID))
+	if err != nil {
+		log.Error("%v", err)
+		return
+	}
+
+	if !cmdService.CanPublish(cmd.RequestID) {
+		return
+	}
+
+	tracker.Set(cmd.RequestID, state.StatusPending)
+
+	payload, err := cmdService.Marshal(cmd)
+	if err != nil {
+		log.Error("%v", err)
+		return
+	}
+
+	publishTopic := cfg.CommandPublishTopic
+	if publishTopic == "" {
+		publishTopic = cfg.CommandTopicFor(saved.DeviceID)
+	}
+
+	log.Publish("Request ID: %s", cmd.RequestID)
+	log.Config("MQTT Version: 5")
+
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	result := mqttclient.PublishCommand(pubCtx, cfg, log, mqttClient.Manager(), publishTopic, payload, saved.ExpirySec)
+	pubCancel()
+
+	if result.Err == nil {
+		cmdService.MarkPublished(cmd.RequestID)
+		log.Publish("Waiting for device-level ACK on %s ...", cfg.AckSubscribeTopic)
+	}
+}
+
+func waitRepeatOrNew(reader *bufio.Reader, last savedCommand) (bool, error) {
+	fmt.Printf("Repeat last (%s / %s / %ds)? Press Ctrl+R (or r) to repeat, Enter for a new command:\n> ", last.Name, last.Value, last.ExpirySec)
+
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			log.Error("%v", err)
-			continue
+			return false, fmt.Errorf("read input: %w", err)
 		}
-		expirySec, err := strconv.ParseUint(strings.TrimSpace(expiryStr), 10, 32)
+		return isRepeatInput(strings.TrimSpace(line)), nil
+	}
+
+	old, err := term.MakeRaw(fd)
+	if err != nil {
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			log.Error("Invalid expiry value: %v", err)
-			continue
+			return false, fmt.Errorf("read input: %w", err)
 		}
+		return isRepeatInput(strings.TrimSpace(line)), nil
+	}
+	defer func() {
+		_ = term.Restore(fd, old)
+	}()
 
-		requestID, err := promptLine(reader, "Request ID (blank = generate):")
-		if err != nil {
-			log.Error("%v", err)
-			continue
+	buf := make([]byte, 1)
+	if _, err := os.Stdin.Read(buf); err != nil {
+		return false, fmt.Errorf("read key: %w", err)
+	}
+	fmt.Print("\r\n")
+
+	switch buf[0] {
+	case 0x12, 'r', 'R':
+		return true, nil
+	case 0x03:
+		_ = term.Restore(fd, old)
+		p, findErr := os.FindProcess(os.Getpid())
+		if findErr == nil {
+			_ = p.Signal(os.Interrupt)
 		}
+		return false, fmt.Errorf("interrupted")
+	case '\r', '\n':
+		return false, nil
+	default:
+		return isRepeatInput(string(buf)), nil
+	}
+}
 
-		cmd, err := cmdService.Build(commandDeviceID, commandName, value, strings.TrimSpace(requestID))
-		if err != nil {
-			log.Error("%v", err)
-			continue
-		}
-
-		if !cmdService.CanPublish(cmd.RequestID) {
-			continue
-		}
-
-		tracker.Set(cmd.RequestID, state.StatusPending)
-
-		payload, err := cmdService.Marshal(cmd)
-		if err != nil {
-			log.Error("%v", err)
-			continue
-		}
-
-		publishTopic := cfg.CommandPublishTopic
-		if publishTopic == "" {
-			publishTopic = cfg.CommandTopicFor(commandDeviceID)
-		}
-
-		log.Publish("Request ID: %s", cmd.RequestID)
-		log.Config("MQTT Version: 5")
-
-		pubCtx, pubCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		result := mqttclient.PublishCommand(pubCtx, cfg, log, mqttClient.Manager(), publishTopic, payload, uint32(expirySec))
-		pubCancel()
-
-		if result.Err == nil {
-			cmdService.MarkPublished(cmd.RequestID)
-			log.Publish("Waiting for device-level ACK on %s ...", cfg.AckSubscribeTopic)
-		}
+func isRepeatInput(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if strings.ContainsRune(s, '\x12') {
+		return true
+	}
+	switch strings.ToLower(s) {
+	case "r", "repeat", "^r":
+		return true
+	default:
+		return false
 	}
 }
 
