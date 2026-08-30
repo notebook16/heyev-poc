@@ -172,9 +172,12 @@ func main() {
 
 func printStartupConfig(log *logger.Logger, cfg *config.Config) {
 	log.Config("Starting HeyEV Backend POC")
+	log.Config("Delivery mode: %s", cfg.DeliveryMode.Label())
 	log.Config("MQTT Version: 5")
 	log.Config("QoS: %d", cfg.QoS)
-	log.Config("Retain: %t", cfg.Retain)
+	log.Config("Retain: %t (effective on publish: %t)", cfg.Retain, cfg.EffectiveRetain())
+	log.Config("Session expiry: %ds", cfg.SessionExpirySec)
+	log.Config("Persistent session: %t", cfg.PersistentSession)
 	log.Config("DUP: %t", cfg.Dup)
 	if cfg.Dup {
 		log.Config("DUP experiment: protocol DUP cannot be forced on outgoing publish with paho.golang")

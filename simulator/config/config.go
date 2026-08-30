@@ -23,17 +23,20 @@ const (
 )
 
 type Config struct {
-	MQTTVersion   string
-	QoS           byte
-	Retain        bool
-	Dup           bool
-	AutoReconnect bool
-	Debug         bool
-	Mode          Mode
-	Endpoint      string
-	ClientID      string
-	DeviceID      string
-	CommandTopic  string
+	MQTTVersion       string
+	DeliveryMode      DeliveryMode
+	QoS               byte
+	Retain            bool
+	Dup               bool
+	AutoReconnect     bool
+	Debug             bool
+	SessionExpirySec  uint32
+	PersistentSession bool
+	Mode              Mode
+	Endpoint          string
+	ClientID          string
+	DeviceID          string
+	CommandTopic      string
 }
 
 func Load() (*Config, error) {
@@ -73,6 +76,19 @@ func (c *Config) validate() error {
 	if c.QoS > 1 {
 		return fmt.Errorf("qos %d is not supported: AWS IoT Core supports QoS 0 and 1 only", c.QoS)
 	}
+
+	if c.DeliveryMode == DeliveryModeB {
+		if c.QoS != 1 {
+			return fmt.Errorf("Option B requires QoS 1 command subscription (offline queue requires QoS 1)")
+		}
+		if !c.PersistentSession {
+			return fmt.Errorf("Option B requires persistent session (Clean Start false on reconnect)")
+		}
+		if c.SessionExpirySec == 0 {
+			return fmt.Errorf("Option B requires session expiry > 0 so the broker keeps the session after disconnect")
+		}
+	}
+
 	return nil
 }
 

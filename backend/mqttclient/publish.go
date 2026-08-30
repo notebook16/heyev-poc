@@ -26,10 +26,12 @@ type PublishResult struct {
 func PublishCommand(ctx context.Context, cfg *config.Config, log *logger.Logger, cm interface {
 	Publish(context.Context, *paho.Publish) (*paho.PublishResponse, error)
 }, topic string, payload []byte, expirySec uint32) PublishResult {
+	retain := cfg.EffectiveRetain()
+
 	result := PublishResult{
 		Topic:     topic,
 		QoS:       cfg.QoS,
-		Retain:    cfg.Retain,
+		Retain:    retain,
 		ExpirySec: expirySec,
 		Payload:   payload,
 		Timestamp: time.Now().UTC(),
@@ -38,8 +40,12 @@ func PublishCommand(ctx context.Context, cfg *config.Config, log *logger.Logger,
 	pub := &paho.Publish{
 		Topic:   topic,
 		QoS:     cfg.QoS,
-		Retain:  cfg.Retain,
+		Retain:  retain,
 		Payload: payload,
+	}
+
+	if cfg.DeliveryMode == config.DeliveryModeB {
+		log.Publish("Option B: retain=false (session queue delivery, not topic retain)")
 	}
 
 	if cfg.Dup {
@@ -58,8 +64,8 @@ func PublishCommand(ctx context.Context, cfg *config.Config, log *logger.Logger,
 	log.Publish("Publishing command...")
 	log.Publish("Topic: %s", topic)
 	log.Publish("QoS: %d", cfg.QoS)
-	log.Publish("Retain: %t", cfg.Retain)
-	if cfg.Retain {
+	log.Publish("Retain: %t", retain)
+	if retain {
 		log.Publish("NOTE: RETAIN=true — this is a retained MQTT message, not a normal transient publish")
 	}
 	log.Publish("Payload: %s", string(payload))

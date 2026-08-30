@@ -40,6 +40,7 @@ func (l *Logger) Ack(format string, args ...any)       { l.log("[ACK]", format, 
 func (l *Logger) Idempotency(format string, args ...any) {
 	l.log("[IDEMPOTENCY]", format, args...)
 }
-func (l *Logger) Expiry(format string, args ...any) { l.log("[EXPIRY]", format, args...) }
-func (l *Logger) State(format string, args ...any)  { l.log("[STATE]", format, args...) }
-func (l *Logger) Error(format string, args ...any)  { l.log("[ERROR]", format, args...) }
+func (l *Logger) Expiry(format string, args ...any)  { l.log("[EXPIRY]", format, args...) }
+func (l *Logger) Session(format string, args ...any) { l.log("[SESSION]", format, args...) }
+func (l *Logger) State(format string, args ...any)   { l.log("[STATE]", format, args...) }
+func (l *Logger) Error(format string, args ...any)   { l.log("[ERROR]", format, args...) }
