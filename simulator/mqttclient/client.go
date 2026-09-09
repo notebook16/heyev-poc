@@ -236,6 +236,34 @@ func (c *Client) PublishACK(ctx context.Context, topic string, payload []byte) e
 	return nil
 }
 
+func (c *Client) PublishTelemetry(ctx context.Context, topic string, payload []byte) error {
+	c.log.Telemetry("Publishing telemetry")
+	c.log.Telemetry("Topic: %s", topic)
+	c.log.Telemetry("QoS: %d", c.cfg.QoS)
+	c.log.Telemetry("Retain: false")
+	c.log.Telemetry("Payload: %s", string(payload))
+
+	pub := &paho.Publish{
+		Topic:   topic,
+		QoS:     c.cfg.QoS,
+		Retain:  false,
+		Payload: payload,
+	}
+
+	resp, err := c.cm.Publish(ctx, pub)
+	if err != nil {
+		c.log.Error("Telemetry publish failed: %v", err)
+		return err
+	}
+
+	if c.cfg.QoS >= 1 && resp != nil {
+		c.log.PubAck("MQTT PUBACK received for telemetry publish (reason=%d)", resp.ReasonCode)
+	}
+
+	c.log.Telemetry("Telemetry published successfully")
+	return nil
+}
+
 func (c *Client) Disconnect(ctx context.Context) error {
 	if c.cm == nil {
 		return nil

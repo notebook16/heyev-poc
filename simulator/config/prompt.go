@@ -85,6 +85,11 @@ func PromptInteractive(r *bufio.Reader) (*Config, error) {
 		return nil, err
 	}
 
+	cfg.PublishTelemetry, err = promptYesNo(r, "Publish hardcoded telemetry after connect?", false)
+	if err != nil {
+		return nil, err
+	}
+
 	fmt.Println()
 	fmt.Println("MQTT Version: 5 (only version supported by this client)")
 	fmt.Println("Message Expiry on commands is set by the backend when it publishes.")

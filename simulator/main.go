@@ -94,6 +94,7 @@ func printStartupConfig(log *logger.Logger, cfg *config.Config) {
 	log.Config("Client ID: %s", cfg.ClientID)
 	log.Config("Endpoint: %s", cfg.Endpoint)
 	log.Config("Auto reconnect: %t", cfg.AutoReconnect)
+	log.Config("Publish telemetry: %t", cfg.PublishTelemetry)
 }
 
 func promptLine(reader *bufio.Reader, label string) (string, error) {

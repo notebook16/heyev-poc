@@ -37,6 +37,7 @@ func (l *Logger) Publish(format string, args ...any)   { l.log("[PUBLISH]", form
 func (l *Logger) PubAck(format string, args ...any)    { l.log("[PUBACK]", format, args...) }
 func (l *Logger) Command(format string, args ...any)   { l.log("[COMMAND]", format, args...) }
 func (l *Logger) Ack(format string, args ...any)       { l.log("[ACK]", format, args...) }
+func (l *Logger) Telemetry(format string, args ...any) { l.log("[TELEMETRY]", format, args...) }
 func (l *Logger) Idempotency(format string, args ...any) {
 	l.log("[IDEMPOTENCY]", format, args...)
 }

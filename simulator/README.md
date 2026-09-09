@@ -56,9 +56,25 @@ Enable auto-reconnect on connection loss? [y]:
 Session expiry in seconds (0 = session ends on disconnect) [900 for Option B]:
 Use persistent MQTT session (offline command queue)? [y for Option B]:
 Enable debug logging? [n]:
+Publish hardcoded telemetry after connect? [n]:
 ```
 
 Press **Enter** to accept defaults. Answer **y** or **n** for yes/no options.
+
+## Telemetry publish (optional)
+
+Answer **y** to "Publish hardcoded telemetry after connect?" to publish a fixed sample payload once after MQTT connect.
+
+| Item | Value |
+|------|-------|
+| Topic | `heyev/v1/devices/866224084563153/telemetry` |
+| QoS | Same as command/ACK QoS from startup prompts |
+| Retain | `false` |
+| Payload | Hardcoded JSON in `telemetry/payload.go` (timestamps are not regenerated) |
+
+Ctrl+R repeats the **last publish** (telemetry after the initial/telemetry publish, ACK after a command ACK).
+
+**IoT policy (simulator Thing):** add `iot:Publish` on `heyev/v1/devices/*/telemetry` (no subscribe/receive/retain needed for this feature).
 
 ## Command delivery modes
 
@@ -107,6 +123,13 @@ When the simulator disconnects, commands published by the backend queue at the b
 **Duplicate ACK test:** select controlled mode, accept first command and ACK, then choose whether to ACK duplicate
 
 **Reconnect test:** keep auto-reconnect enabled (default)
+
+**Telemetry publish test:**
+
+1. Answer `y` to "Publish hardcoded telemetry after connect?"
+2. Confirm publish to `heyev/v1/devices/866224084563153/telemetry`
+3. Press Ctrl+R to republish the same payload
+4. After a command ACK, Ctrl+R repeats that ACK instead
 
 **Option B offline queue test:**
 

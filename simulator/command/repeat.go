@@ -9,14 +9,23 @@ import (
 	"golang.org/x/term"
 )
 
-type lastACK struct {
+type publishKind string
+
+const (
+	publishKindACK       publishKind = "ack"
+	publishKindTelemetry publishKind = "telemetry"
+)
+
+type lastPublish struct {
+	Kind      publishKind
 	Topic     string
 	Payload   []byte
 	RequestID string
 }
 
-func waitRepeatOrNew(reader *bufio.Reader, last lastACK) (bool, error) {
-	fmt.Printf("Repeat last ACK (request_id=%s)? Press Ctrl+R (or r) to repeat with the same config, Enter to wait for the next command:\n> ", last.RequestID)
+func waitRepeatOrNew(reader *bufio.Reader, last lastPublish) (bool, error) {
+	prompt := repeatPrompt(last)
+	fmt.Printf("%s\n> ", prompt)
 
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
@@ -59,6 +68,15 @@ func waitRepeatOrNew(reader *bufio.Reader, last lastACK) (bool, error) {
 		return false, nil
 	default:
 		return isRepeatInput(string(buf)), nil
+	}
+}
+
+func repeatPrompt(last lastPublish) string {
+	switch last.Kind {
+	case publishKindTelemetry:
+		return "Repeat last telemetry? Press Ctrl+R (or r) to repeat with the same config, Enter to wait for the next command:"
+	default:
+		return fmt.Sprintf("Repeat last ACK (request_id=%s)? Press Ctrl+R (or r) to repeat with the same config, Enter to wait for the next command:", last.RequestID)
 	}
 }
 
