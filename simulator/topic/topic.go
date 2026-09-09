@@ -15,6 +15,10 @@ func CommandTopic(deviceID string) string {
 	return fmt.Sprintf("%s%s/commands", prefix, deviceID)
 }
 
+func TelemetryTopic(deviceID string) string {
+	return fmt.Sprintf("%s%s/telemetry", prefix, deviceID)
+}
+
 func ParseDeviceID(topic string) (string, error) {
 	if !strings.HasPrefix(topic, prefix) {
 		return "", fmt.Errorf("topic %q does not match heyev/v1/devices/{device_id}/...", topic)

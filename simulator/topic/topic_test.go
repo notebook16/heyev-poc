@@ -17,3 +17,9 @@ func TestAckTopic(t *testing.T) {
 		t.Fatalf("unexpected: %s", got)
 	}
 }
+
+func TestTelemetryTopic(t *testing.T) {
+	if got := TelemetryTopic("866224084563153"); got != "heyev/v1/devices/866224084563153/telemetry" {
+		t.Fatalf("unexpected: %s", got)
+	}
+}

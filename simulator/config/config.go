@@ -33,6 +33,7 @@ type Config struct {
 	SessionExpirySec  uint32
 	PersistentSession bool
 	Mode              Mode
+	PublishTelemetry  bool
 	Endpoint          string
 	ClientID          string
 	DeviceID          string

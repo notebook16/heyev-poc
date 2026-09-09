@@ -13,11 +13,13 @@ import (
 	"iot-simulator-poc/ack"
 	"iot-simulator-poc/config"
 	"iot-simulator-poc/logger"
+	"iot-simulator-poc/telemetry"
 	"iot-simulator-poc/topic"
 )
 
 type Publisher interface {
 	PublishACK(ctx context.Context, topic string, payload []byte) error
+	PublishTelemetry(ctx context.Context, topic string, payload []byte) error
 }
 
 type Handler struct {
@@ -29,7 +31,7 @@ type Handler struct {
 	seenMu  sync.Mutex
 	reader  *bufio.Reader
 	lastMu  sync.Mutex
-	last    *lastACK
+	last    *lastPublish
 }
 
 func NewHandler(cfg *config.Config, log *logger.Logger, pub Publisher, reader *bufio.Reader) *Handler {
@@ -68,7 +70,15 @@ func (h *Handler) Run(ctx context.Context) {
 	} else {
 		h.log.Simulator("Controlled mode: waiting for commands...")
 	}
-	h.log.Simulator("After each ACK, press Ctrl+R to repeat it with the same QoS/retain. Enter waits for the next command.")
+	h.log.Simulator("After each publish, press Ctrl+R to repeat it with the same QoS/retain. Enter waits for the next command.")
+
+	if h.cfg.PublishTelemetry {
+		if err := h.publishInitialTelemetry(ctx); err != nil {
+			h.log.Error("Initial telemetry publish failed: %v", err)
+		} else {
+			h.offerRepeat(ctx)
+		}
+	}
 
 	for {
 		select {
@@ -85,8 +95,25 @@ func (h *Handler) Run(ctx context.Context) {
 	}
 }
 
+func (h *Handler) publishInitialTelemetry(ctx context.Context) error {
+	telTopic := telemetry.Topic()
+	payload := telemetry.Bytes()
+
+	h.log.Telemetry("Device ID: %s", telemetry.DeviceID)
+
+	pubCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	if err := h.pub.PublishTelemetry(pubCtx, telTopic, payload); err != nil {
+		return err
+	}
+
+	h.rememberPublish(publishKindTelemetry, telTopic, payload, "")
+	return nil
+}
+
 func (h *Handler) offerRepeat(ctx context.Context) {
-	last := h.copyLastACK()
+	last := h.copyLastPublish()
 	if last == nil {
 		return
 	}
@@ -107,25 +134,30 @@ func (h *Handler) offerRepeat(ctx context.Context) {
 			return
 		}
 
-		h.log.Ack("Repeating last ACK request_id=%s with same QoS=%d retain=%t", last.RequestID, h.cfg.QoS, h.cfg.Retain)
-		if err := h.repeatLastACK(ctx); err != nil {
+		switch last.Kind {
+		case publishKindTelemetry:
+			h.log.Telemetry("Repeating last telemetry with same QoS=%d retain=false", h.cfg.QoS)
+		default:
+			h.log.Ack("Repeating last ACK request_id=%s with same QoS=%d retain=%t", last.RequestID, h.cfg.QoS, h.cfg.Retain)
+		}
+		if err := h.repeatLastPublish(ctx); err != nil {
 			return
 		}
-		last = h.copyLastACK()
+		last = h.copyLastPublish()
 		if last == nil {
 			return
 		}
 	}
 }
 
-func (h *Handler) rememberACK(ackTopic string, payload []byte, requestID string) {
+func (h *Handler) rememberPublish(kind publishKind, pubTopic string, payload []byte, requestID string) {
 	copied := append([]byte(nil), payload...)
 	h.lastMu.Lock()
-	h.last = &lastACK{Topic: ackTopic, Payload: copied, RequestID: requestID}
+	h.last = &lastPublish{Kind: kind, Topic: pubTopic, Payload: copied, RequestID: requestID}
 	h.lastMu.Unlock()
 }
 
-func (h *Handler) copyLastACK() *lastACK {
+func (h *Handler) copyLastPublish() *lastPublish {
 	h.lastMu.Lock()
 	defer h.lastMu.Unlock()
 	if h.last == nil {
@@ -136,16 +168,22 @@ func (h *Handler) copyLastACK() *lastACK {
 	return &copied
 }
 
-func (h *Handler) repeatLastACK(ctx context.Context) error {
-	last := h.copyLastACK()
+func (h *Handler) repeatLastPublish(ctx context.Context) error {
+	last := h.copyLastPublish()
 	if last == nil {
-		h.log.Error("no previous ACK to repeat yet")
-		return fmt.Errorf("no previous ACK to repeat yet")
+		h.log.Error("no previous publish to repeat yet")
+		return fmt.Errorf("no previous publish to repeat yet")
 	}
 
 	pubCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	return h.pub.PublishACK(pubCtx, last.Topic, last.Payload)
+
+	switch last.Kind {
+	case publishKindTelemetry:
+		return h.pub.PublishTelemetry(pubCtx, last.Topic, last.Payload)
+	default:
+		return h.pub.PublishACK(pubCtx, last.Topic, last.Payload)
+	}
 }
 
 func (h *Handler) handleAutonomous(cmd *IncomingCommand) {
@@ -168,7 +206,7 @@ func (h *Handler) handleAutonomous(cmd *IncomingCommand) {
 		return
 	}
 
-	h.rememberACK(ackTopic, payload, cmd.RequestID)
+	h.rememberPublish(publishKindACK, ackTopic, payload, cmd.RequestID)
 	h.markSeen(cmd.RequestID)
 }
 
@@ -234,7 +272,7 @@ func (h *Handler) presentControlledCommand(ctx context.Context, cmd *IncomingCom
 		return
 	}
 
-	h.rememberACK(ackTopic, payload, cmd.RequestID)
+	h.rememberPublish(publishKindACK, ackTopic, payload, cmd.RequestID)
 	h.markSeen(cmd.RequestID)
 }
 
